@@ -1,0 +1,298 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile and default cooperative assignment",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "defaultOrgId": { "type": "string", "maxLength": 128 },
+        "locale": { "type": "string", "enum": ["fr", "en"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "locale", "createdAt", "updatedAt"]
+    },
+    "Organization": {
+      "title": "Organization",
+      "description": "Multi-tenant agricultural cooperative, farm, or processing unit",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "orgType": { "type": "string", "enum": ["cooperative", "ferme", "gie", "transformation"] },
+        "region": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array", "description": "Bounded list of member UIDs (max 20)" },
+        "whatsappNumber": { "type": "string", "maxLength": 30 },
+        "whatsappReportTime": { "type": "string", "minLength": 5, "maxLength": 5, "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "whatsappPreferences": { "type": "object", "description": "WhatsApp report content and cadence preferences" },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "trial", "past_due"] },
+        "subscriptionPlan": { "type": "string", "enum": ["monthly", "quarterly", "annual"] },
+        "planAmountUsd": { "type": "number" },
+        "paymentChannel": { "type": "string", "enum": ["wave", "orange_money", "free_money", "cash"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "orgType", "region", "ownerId", "memberUids", "whatsappReportTime", "subscriptionStatus", "planAmountUsd", "createdAt", "updatedAt"]
+    },
+    "OrgMember": {
+      "title": "OrgMember",
+      "description": "RBAC member inside a cooperative organization with 4-digit PIN access",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "manager", "pointer"] },
+        "pinCode": { "type": "string", "minLength": 4, "maxLength": 4, "pattern": "^[0-9]{4}$" },
+        "phone": { "type": "string", "maxLength": 30 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "orgOwnerId", "memberUids", "name", "role", "pinCode", "active", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory catalog item (inputs, feed, harvest, packaging)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "barcode": { "type": "string", "maxLength": 64 },
+        "category": { "type": "string", "enum": ["intrants", "provende", "recoltes", "emballages"] },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "quantity": { "type": "number" },
+        "minThreshold": { "type": "number" },
+        "unitCostFcfa": { "type": "number" },
+        "unitPriceFcfa": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "name", "category", "unit", "quantity", "minThreshold", "unitCostFcfa", "unitPriceFcfa", "createdAt", "updatedAt"]
+    },
+    "StockMovement": {
+      "title": "StockMovement",
+      "description": "Immutable stock movement or physical inventory adjustment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "productName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "movementType": { "type": "string", "enum": ["entree_achat", "entree_apport", "entree_recolte", "sortie_vente", "sortie_interne", "perte", "ajustement"] },
+        "quantityDelta": { "type": "number" },
+        "justification": { "type": "string", "minLength": 3, "maxLength": 300 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "productId", "productName", "movementType", "quantityDelta", "justification", "actorName", "actorUid", "createdAt"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "POS sale transaction supporting multi-payment and mixed credit",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "itemsSummary": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "subtotalFcfa": { "type": "number" },
+        "discountFcfa": { "type": "number" },
+        "totalFcfa": { "type": "number" },
+        "cashFcfa": { "type": "number" },
+        "mobileMoneyFcfa": { "type": "number" },
+        "mobileMoneyProvider": { "type": "string", "enum": ["none", "wave", "orange_money", "free_money", "mtn_momo"] },
+        "creditFcfa": { "type": "number" },
+        "debtorId": { "type": "string", "maxLength": 128 },
+        "debtorName": { "type": "string", "maxLength": 120 },
+        "cashierUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "cashierName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "status": { "type": "string", "enum": ["completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "itemsSummary", "subtotalFcfa", "discountFcfa", "totalFcfa", "cashFcfa", "mobileMoneyFcfa", "mobileMoneyProvider", "creditFcfa", "cashierUid", "cashierName", "status", "createdAt", "updatedAt"]
+    },
+    "Debtor": {
+      "title": "Debtor",
+      "description": "Identified credit customer or cooperative member",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "minLength": 6, "maxLength": 30 },
+        "zone": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "totalCreditFcfa": { "type": "number" },
+        "totalPaidFcfa": { "type": "number" },
+        "remainingFcfa": { "type": "number" },
+        "dueDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["en_cours", "partiel", "en_retard", "solde"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "fullName", "phone", "zone", "totalCreditFcfa", "totalPaidFcfa", "remainingFcfa", "dueDate", "status", "createdAt", "updatedAt"]
+    },
+    "DebtPayment": {
+      "title": "DebtPayment",
+      "description": "Installment repayment record on a debtor account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "debtorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "debtorName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "amountFcfa": { "type": "number" },
+        "channel": { "type": "string", "enum": ["cash", "wave", "orange_money", "free_money"] },
+        "receiptRef": { "type": "string", "minLength": 3, "maxLength": 40 },
+        "recordedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recordedByName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "debtorId", "debtorName", "amountFcfa", "channel", "receiptRef", "recordedByUid", "recordedByName", "createdAt"]
+    },
+    "Worker": {
+      "title": "Worker",
+      "description": "Agricultural worker (permanent, daily, seasonal)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "contractType": { "type": "string", "enum": ["permanent", "journalier", "saisonnier"] },
+        "payBasis": { "type": "string", "enum": ["jour", "semaine", "tache"] },
+        "rateFcfa": { "type": "number" },
+        "advancesFcfa": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "fullName", "contractType", "payBasis", "rateFcfa", "advancesFcfa", "active", "createdAt", "updatedAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily worker attendance or piecework harvest log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "workerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workerName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "workDate": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "status": { "type": "string", "enum": ["present", "demi_journee", "absent", "tache"] },
+        "unitsCompleted": { "type": "number" },
+        "earnedFcfa": { "type": "number" },
+        "advanceGivenFcfa": { "type": "number" },
+        "paidOut": { "type": "boolean" },
+        "recordedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "workerId", "workerName", "workDate", "status", "unitsCompleted", "earnedFcfa", "advanceGivenFcfa", "paidOut", "recordedByUid", "createdAt", "updatedAt"]
+    },
+    "CashClosing": {
+      "title": "CashClosing",
+      "description": "Daily POS cash register reconciliation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "closingDate": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "theoreticalCashFcfa": { "type": "number" },
+        "countedCashFcfa": { "type": "number" },
+        "varianceFcfa": { "type": "number" },
+        "mobileMoneyTotalFcfa": { "type": "number" },
+        "creditTotalFcfa": { "type": "number" },
+        "note": { "type": "string", "maxLength": 300 },
+        "closedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "closedByName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "closingDate", "theoreticalCashFcfa", "countedCashFcfa", "varianceFcfa", "mobileMoneyTotalFcfa", "creditTotalFcfa", "closedByUid", "closedByName", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable operational audit trail",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orgOwnerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "memberUids": { "type": "array" },
+        "action": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "entityType": { "type": "string", "minLength": 2, "maxLength": 50 },
+        "summary": { "type": "string", "minLength": 2, "maxLength": 300 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orgOwnerId", "memberUids", "action", "entityType", "summary", "actorUid", "actorName", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile isolated to owner"
+    },
+    "/organizations/{orgId}": {
+      "schema": { "$ref": "#/entities/Organization" },
+      "description": "Cooperative tenant root document"
+    },
+    "/organizations/{orgId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/OrgMember" },
+      "description": "Cooperative RBAC members and PIN assignments"
+    },
+    "/organizations/{orgId}/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Cooperative stock catalog items"
+    },
+    "/organizations/{orgId}/movements/{movementId}": {
+      "schema": { "$ref": "#/entities/StockMovement" },
+      "description": "Stock movement and inventory audit entries"
+    },
+    "/organizations/{orgId}/sales/{saleId}": {
+      "schema": { "$ref": "#/entities/Sale" },
+      "description": "POS sales transactions"
+    },
+    "/organizations/{orgId}/debtors/{debtorId}": {
+      "schema": { "$ref": "#/entities/Debtor" },
+      "description": "Customer and member credit accounts"
+    },
+    "/organizations/{orgId}/debtPayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/DebtPayment" },
+      "description": "Debt installment repayments"
+    },
+    "/organizations/{orgId}/workers/{workerId}": {
+      "schema": { "$ref": "#/entities/Worker" },
+      "description": "Farm and cooperative workers directory"
+    },
+    "/organizations/{orgId}/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Daily attendance and piecework logs"
+    },
+    "/organizations/{orgId}/cashClosings/{closingId}": {
+      "schema": { "$ref": "#/entities/CashClosing" },
+      "description": "Daily cash register reconciliations"
+    },
+    "/organizations/{orgId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable operational audit logs"
+    }
+  }
+}

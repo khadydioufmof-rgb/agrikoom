@@ -1,0 +1,6 @@
+{
+  "name": "AgriKoom",
+  "description": "Plateforme SaaS Mobile-First & Offline-First de gestion opérationnelle pour coopératives agricoles, fermes et unités de transformation.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,604 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && (
+        request.auth.token.email_verified == true ||
+        ('phone_number' in request.auth.token && request.auth.token.phone_number is string && request.auth.token.phone_number.size() >= 6)
+      );
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email_verified == true && request.auth.token.email == 'bishflix2@gmail.com') ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidMemberUids(listVal) {
+      return listVal is list
+        && listVal.size() >= 1
+        && listVal.size() <= 20
+        && listVal[0] is string
+        && listVal[0].size() >= 1
+        && listVal[0].size() <= 128;
+    }
+
+    function orgExists(orgId) {
+      return exists(/databases/$(database)/documents/organizations/$(orgId));
+    }
+
+    function orgData(orgId) {
+      return get(/databases/$(database)/documents/organizations/$(orgId)).data;
+    }
+
+    function isOrgOwner(orgId) {
+      return orgExists(orgId) && orgData(orgId).ownerId == request.auth.uid;
+    }
+
+    function isOrgMember(orgId) {
+      return isSuperAdmin() || (
+        orgExists(orgId) && (
+          orgData(orgId).ownerId == request.auth.uid ||
+          request.auth.uid in orgData(orgId).memberUids
+        )
+      );
+    }
+
+    function isOrgAdmin(orgId) {
+      return isSuperAdmin() || isOrgOwner(orgId) || (
+        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.role == 'admin' &&
+        get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.active == true
+      );
+    }
+
+    function canManageOperations(orgId) {
+      return isOrgAdmin(orgId) || (
+        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.role in ['admin', 'manager'] &&
+        get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.active == true
+      );
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'locale', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'displayName', 'defaultOrgId', 'locale', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && (('email' in data && data.email.size() >= 3) || ('phone' in data && data.phone.size() >= 6))
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('defaultOrgId' in data) || (data.defaultOrgId is string && data.defaultOrgId.size() <= 128))
+        && data.locale in ['fr', 'en']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWhatsappPreferences(prefs) {
+      return prefs is map
+        && prefs.keys().hasAll(['includeRevenue', 'includeTreasury', 'includeDebts', 'includeStockAlerts', 'includePayroll', 'weeklySummary', 'monthlySummary'])
+        && prefs.keys().hasOnly(['includeRevenue', 'includeTreasury', 'includeDebts', 'includeStockAlerts', 'includePayroll', 'weeklySummary', 'monthlySummary'])
+        && prefs.includeRevenue is bool
+        && prefs.includeTreasury is bool
+        && prefs.includeDebts is bool
+        && prefs.includeStockAlerts is bool
+        && prefs.includePayroll is bool
+        && prefs.weeklySummary is bool
+        && prefs.monthlySummary is bool;
+    }
+
+    function isValidOrganization(data) {
+      return data.keys().hasAll(['id', 'name', 'orgType', 'region', 'ownerId', 'memberUids', 'whatsappReportTime', 'subscriptionStatus', 'planAmountUsd', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'orgType', 'region', 'phone', 'ownerId', 'memberUids', 'whatsappNumber', 'whatsappReportTime', 'whatsappPreferences', 'subscriptionStatus', 'subscriptionPlan', 'planAmountUsd', 'paymentChannel', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.orgType in ['cooperative', 'ferme', 'gie', 'transformation']
+        && data.region is string && data.region.size() >= 2 && data.region.size() <= 100
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && isValidId(data.ownerId)
+        && isValidMemberUids(data.memberUids)
+        && (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.size() <= 30))
+        && data.whatsappReportTime is string && data.whatsappReportTime.size() == 5 && data.whatsappReportTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+        && (!('whatsappPreferences' in data) || isValidWhatsappPreferences(data.whatsappPreferences))
+        && data.subscriptionStatus in ['active', 'trial', 'past_due']
+        && data.planAmountUsd is number && data.planAmountUsd >= 0 && data.planAmountUsd <= 10000
+        && (!('subscriptionPlan' in data) || (
+          data.subscriptionPlan in ['monthly', 'quarterly', 'annual'] &&
+          (
+            (data.subscriptionPlan == 'monthly' && data.planAmountUsd == 49) ||
+            (data.subscriptionPlan == 'quarterly' && data.planAmountUsd == 135) ||
+            (data.subscriptionPlan == 'annual' && data.planAmountUsd == 470)
+          )
+        ))
+        && (!('paymentChannel' in data) || data.paymentChannel in ['wave', 'orange_money', 'free_money', 'cash'])
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrgMember(data) {
+      return data.keys().hasAll(['uid', 'orgOwnerId', 'memberUids', 'name', 'role', 'pinCode', 'active', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'orgOwnerId', 'memberUids', 'name', 'role', 'pinCode', 'phone', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 100
+        && data.role in ['admin', 'manager', 'pointer']
+        && data.pinCode is string && data.pinCode.size() == 4 && data.pinCode.matches('^[0-9]{4}$')
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'name', 'category', 'unit', 'quantity', 'minThreshold', 'unitCostFcfa', 'unitPriceFcfa', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'name', 'barcode', 'category', 'unit', 'quantity', 'minThreshold', 'unitCostFcfa', 'unitPriceFcfa', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && (!('barcode' in data) || (data.barcode is string && data.barcode.size() <= 64))
+        && data.category in ['intrants', 'provende', 'recoltes', 'emballages']
+        && data.unit is string && data.unit.size() >= 1 && data.unit.size() <= 40
+        && data.quantity is number && data.quantity >= 0 && data.quantity <= 10000000
+        && data.minThreshold is number && data.minThreshold >= 0 && data.minThreshold <= 1000000
+        && data.unitCostFcfa is number && data.unitCostFcfa >= 0 && data.unitCostFcfa <= 100000000
+        && data.unitPriceFcfa is number && data.unitPriceFcfa >= 0 && data.unitPriceFcfa <= 100000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStockMovement(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'productId', 'productName', 'movementType', 'quantityDelta', 'justification', 'actorName', 'actorUid', 'createdAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'productId', 'productName', 'movementType', 'quantityDelta', 'justification', 'actorName', 'actorUid', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && isValidId(data.productId)
+        && data.productName is string && data.productName.size() >= 1 && data.productName.size() <= 120
+        && data.movementType in ['entree_achat', 'entree_apport', 'entree_recolte', 'sortie_vente', 'sortie_interne', 'perte', 'ajustement']
+        && data.quantityDelta is number && data.quantityDelta >= -1000000 && data.quantityDelta <= 1000000
+        && data.justification is string && data.justification.size() >= 3 && data.justification.size() <= 300
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 100
+        && isValidId(data.actorUid)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSale(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'itemsSummary', 'subtotalFcfa', 'discountFcfa', 'totalFcfa', 'cashFcfa', 'mobileMoneyFcfa', 'mobileMoneyProvider', 'creditFcfa', 'cashierUid', 'cashierName', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'itemsSummary', 'subtotalFcfa', 'discountFcfa', 'totalFcfa', 'cashFcfa', 'mobileMoneyFcfa', 'mobileMoneyProvider', 'creditFcfa', 'debtorId', 'debtorName', 'cashierUid', 'cashierName', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.itemsSummary is string && data.itemsSummary.size() >= 1 && data.itemsSummary.size() <= 500
+        && data.subtotalFcfa is number && data.subtotalFcfa >= 0 && data.subtotalFcfa <= 1000000000
+        && data.discountFcfa is number && data.discountFcfa >= 0 && data.discountFcfa <= 1000000000
+        && data.totalFcfa is number && data.totalFcfa >= 0 && data.totalFcfa <= 1000000000
+        && data.cashFcfa is number && data.cashFcfa >= 0 && data.cashFcfa <= 1000000000
+        && data.mobileMoneyFcfa is number && data.mobileMoneyFcfa >= 0 && data.mobileMoneyFcfa <= 1000000000
+        && data.mobileMoneyProvider in ['none', 'wave', 'orange_money', 'free_money', 'mtn_momo']
+        && data.creditFcfa is number && data.creditFcfa >= 0 && data.creditFcfa <= 1000000000
+        && (!('debtorId' in data) || (data.debtorId is string && data.debtorId.size() <= 128))
+        && (!('debtorName' in data) || (data.debtorName is string && data.debtorName.size() <= 120))
+        && isValidId(data.cashierUid)
+        && data.cashierName is string && data.cashierName.size() >= 1 && data.cashierName.size() <= 100
+        && data.status in ['completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDebtor(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'fullName', 'phone', 'zone', 'totalCreditFcfa', 'totalPaidFcfa', 'remainingFcfa', 'dueDate', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'fullName', 'phone', 'zone', 'totalCreditFcfa', 'totalPaidFcfa', 'remainingFcfa', 'dueDate', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.phone is string && data.phone.size() >= 6 && data.phone.size() <= 30
+        && data.zone is string && data.zone.size() >= 2 && data.zone.size() <= 100
+        && data.totalCreditFcfa is number && data.totalCreditFcfa >= 0 && data.totalCreditFcfa <= 1000000000
+        && data.totalPaidFcfa is number && data.totalPaidFcfa >= 0 && data.totalPaidFcfa <= 1000000000
+        && data.remainingFcfa is number && data.remainingFcfa >= 0 && data.remainingFcfa <= 1000000000
+        && data.dueDate is string && data.dueDate.size() >= 4 && data.dueDate.size() <= 20
+        && data.status in ['en_cours', 'partiel', 'en_retard', 'solde']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDebtPayment(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'debtorId', 'debtorName', 'amountFcfa', 'channel', 'receiptRef', 'recordedByUid', 'recordedByName', 'createdAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'debtorId', 'debtorName', 'amountFcfa', 'channel', 'receiptRef', 'recordedByUid', 'recordedByName', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && isValidId(data.debtorId)
+        && data.debtorName is string && data.debtorName.size() >= 1 && data.debtorName.size() <= 120
+        && data.amountFcfa is number && data.amountFcfa > 0 && data.amountFcfa <= 1000000000
+        && data.channel in ['cash', 'wave', 'orange_money', 'free_money']
+        && data.receiptRef is string && data.receiptRef.size() >= 3 && data.receiptRef.size() <= 40
+        && isValidId(data.recordedByUid)
+        && data.recordedByName is string && data.recordedByName.size() >= 1 && data.recordedByName.size() <= 100
+        && data.createdAt is timestamp;
+    }
+
+    function isValidWorker(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'fullName', 'contractType', 'payBasis', 'rateFcfa', 'advancesFcfa', 'active', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'fullName', 'phone', 'contractType', 'payBasis', 'rateFcfa', 'advancesFcfa', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && data.contractType in ['permanent', 'journalier', 'saisonnier']
+        && data.payBasis in ['jour', 'semaine', 'tache']
+        && data.rateFcfa is number && data.rateFcfa >= 0 && data.rateFcfa <= 100000000
+        && data.advancesFcfa is number && data.advancesFcfa >= 0 && data.advancesFcfa <= 100000000
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAttendanceRecord(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'workerId', 'workerName', 'workDate', 'status', 'unitsCompleted', 'earnedFcfa', 'advanceGivenFcfa', 'paidOut', 'recordedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'workerId', 'workerName', 'workDate', 'status', 'unitsCompleted', 'earnedFcfa', 'advanceGivenFcfa', 'paidOut', 'recordedByUid', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && isValidId(data.workerId)
+        && data.workerName is string && data.workerName.size() >= 1 && data.workerName.size() <= 120
+        && data.workDate is string && data.workDate.size() == 10
+        && data.status in ['present', 'demi_journee', 'absent', 'tache']
+        && data.unitsCompleted is number && data.unitsCompleted >= 0 && data.unitsCompleted <= 100000
+        && data.earnedFcfa is number && data.earnedFcfa >= 0 && data.earnedFcfa <= 100000000
+        && data.advanceGivenFcfa is number && data.advanceGivenFcfa >= 0 && data.advanceGivenFcfa <= 100000000
+        && data.paidOut is bool
+        && isValidId(data.recordedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCashClosing(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'closingDate', 'theoreticalCashFcfa', 'countedCashFcfa', 'varianceFcfa', 'mobileMoneyTotalFcfa', 'creditTotalFcfa', 'closedByUid', 'closedByName', 'createdAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'closingDate', 'theoreticalCashFcfa', 'countedCashFcfa', 'varianceFcfa', 'mobileMoneyTotalFcfa', 'creditTotalFcfa', 'note', 'closedByUid', 'closedByName', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.closingDate is string && data.closingDate.size() == 10
+        && data.theoreticalCashFcfa is number && data.theoreticalCashFcfa >= 0 && data.theoreticalCashFcfa <= 1000000000
+        && data.countedCashFcfa is number && data.countedCashFcfa >= 0 && data.countedCashFcfa <= 1000000000
+        && data.varianceFcfa is number && data.varianceFcfa >= -1000000000 && data.varianceFcfa <= 1000000000
+        && data.mobileMoneyTotalFcfa is number && data.mobileMoneyTotalFcfa >= 0 && data.mobileMoneyTotalFcfa <= 1000000000
+        && data.creditTotalFcfa is number && data.creditTotalFcfa >= 0 && data.creditTotalFcfa <= 1000000000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 300))
+        && isValidId(data.closedByUid)
+        && data.closedByName is string && data.closedByName.size() >= 1 && data.closedByName.size() <= 100
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'orgOwnerId', 'memberUids', 'action', 'entityType', 'summary', 'actorUid', 'actorName', 'createdAt'])
+        && data.keys().hasOnly(['id', 'orgOwnerId', 'memberUids', 'action', 'entityType', 'summary', 'actorUid', 'actorName', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.orgOwnerId)
+        && isValidMemberUids(data.memberUids)
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
+        && data.entityType is string && data.entityType.size() >= 2 && data.entityType.size() <= 50
+        && data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 300
+        && isValidId(data.actorUid)
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 100
+        && data.createdAt is timestamp;
+    }
+
+    // 4. Connection check document
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // 5. Bootstrapped Admins Collection
+    match /admins/{adminUid} {
+      allow get: if isOwner(adminUid) || isSuperAdmin();
+      allow list, create, update, delete: if false;
+    }
+
+    // 6. User Profiles (Strict PII Isolation)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isSuperAdmin());
+      allow list: if isSignedIn() && (isSuperAdmin() || resource.data.uid == request.auth.uid);
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'defaultOrgId', 'locale', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // 7. Organizations (Multi-Tenant Root)
+    match /organizations/{orgId} {
+      allow get: if isValidId(orgId) && isSignedIn() && (
+        isSuperAdmin() || existing().ownerId == request.auth.uid || request.auth.uid in existing().memberUids
+      );
+      allow list: if isSignedIn() && (
+        isSuperAdmin() || resource.data.ownerId == request.auth.uid || request.auth.uid in resource.data.memberUids
+      );
+      allow create: if isValidId(orgId)
+        && isSignedIn()
+        && isValidOrganization(incoming())
+        && incoming().id == orgId
+        && incoming().ownerId == request.auth.uid
+        && request.auth.uid in incoming().memberUids
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(orgId)
+        && isSignedIn()
+        && isValidOrganization(incoming())
+        && (isSuperAdmin() || isOrgAdmin(orgId))
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isSuperAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'orgType', 'region', 'phone', 'memberUids', 'whatsappNumber', 'whatsappReportTime', 'whatsappPreferences', 'subscriptionStatus', 'subscriptionPlan', 'planAmountUsd', 'paymentChannel', 'updatedAt'])) ||
+          (isOrgAdmin(orgId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'orgType', 'region', 'phone', 'memberUids', 'whatsappNumber', 'whatsappReportTime', 'whatsappPreferences', 'subscriptionPlan', 'planAmountUsd', 'paymentChannel', 'updatedAt']) && ('subscriptionPlan' in incoming() || incoming().planAmountUsd == existing().planAmountUsd))
+        );
+      allow delete: if isValidId(orgId) && isSuperAdmin();
+
+      // Members Subcollection
+      match /members/{memberId} {
+        allow get: if isValidId(orgId) && isValidId(memberId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(memberId)
+          && isSignedIn()
+          && isValidOrgMember(incoming())
+          && isOrgAdmin(orgId)
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(orgId) && isValidId(memberId)
+          && isSignedIn()
+          && isValidOrgMember(incoming())
+          && isOrgAdmin(orgId)
+          && incoming().uid == existing().uid
+          && incoming().orgOwnerId == existing().orgOwnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pinCode', 'phone', 'active', 'memberUids', 'updatedAt']);
+        allow delete: if isValidId(orgId) && isValidId(memberId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 1: Products (Stocks)
+      match /products/{productId} {
+        allow get: if isValidId(orgId) && isValidId(productId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(productId)
+          && isSignedIn()
+          && isValidProduct(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == productId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(orgId) && isValidId(productId)
+          && isSignedIn()
+          && isValidProduct(incoming())
+          && isOrgMember(orgId)
+          && incoming().id == existing().id
+          && incoming().orgOwnerId == existing().orgOwnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (isOrgAdmin(orgId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'barcode', 'category', 'unit', 'quantity', 'minThreshold', 'unitCostFcfa', 'unitPriceFcfa', 'memberUids', 'updatedAt'])) ||
+            (canManageOperations(orgId) && incoming().diff(existing()).affectedKeys().hasOnly(['barcode', 'quantity', 'updatedAt'])) ||
+            (isOrgMember(orgId) && incoming().diff(existing()).affectedKeys().hasOnly(['quantity', 'updatedAt']))
+          );
+        allow delete: if isValidId(orgId) && isValidId(productId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 1: Stock Movements (Append-Only Ledger)
+      match /movements/{movementId} {
+        allow get: if isValidId(orgId) && isValidId(movementId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(movementId)
+          && isSignedIn()
+          && isValidStockMovement(incoming())
+          && isOrgMember(orgId)
+          && exists(/databases/$(database)/documents/organizations/$(orgId)/products/$(incoming().productId))
+          && incoming().id == movementId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().actorUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(orgId) && isValidId(movementId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 2: POS Sales
+      match /sales/{saleId} {
+        allow get: if isValidId(orgId) && isValidId(saleId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(saleId)
+          && isSignedIn()
+          && isValidSale(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == saleId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().cashierUid == request.auth.uid
+          && incoming().status == 'completed'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(orgId) && isValidId(saleId)
+          && isSignedIn()
+          && isValidSale(incoming())
+          && isOrgAdmin(orgId)
+          && existing().status == 'completed'
+          && incoming().status == 'cancelled'
+          && incoming().id == existing().id
+          && incoming().orgOwnerId == existing().orgOwnerId
+          && incoming().cashierUid == existing().cashierUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+        allow delete: if isValidId(orgId) && isValidId(saleId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 3: Debtors
+      match /debtors/{debtorId} {
+        allow get: if isValidId(orgId) && isValidId(debtorId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(debtorId)
+          && isSignedIn()
+          && isValidDebtor(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == debtorId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(orgId) && isValidId(debtorId)
+          && isSignedIn()
+          && isValidDebtor(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == existing().id
+          && incoming().orgOwnerId == existing().orgOwnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (isOrgAdmin(orgId) && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'zone', 'totalCreditFcfa', 'totalPaidFcfa', 'remainingFcfa', 'dueDate', 'status', 'memberUids', 'updatedAt'])) ||
+            (canManageOperations(orgId) && incoming().diff(existing()).affectedKeys().hasOnly(['totalCreditFcfa', 'totalPaidFcfa', 'remainingFcfa', 'status', 'dueDate', 'updatedAt']))
+          );
+        allow delete: if isValidId(orgId) && isValidId(debtorId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 3: Debt Payments (Append-Only)
+      match /debtPayments/{paymentId} {
+        allow get: if isValidId(orgId) && isValidId(paymentId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(paymentId)
+          && isSignedIn()
+          && isValidDebtPayment(incoming())
+          && canManageOperations(orgId)
+          && exists(/databases/$(database)/documents/organizations/$(orgId)/debtors/$(incoming().debtorId))
+          && incoming().id == paymentId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().recordedByUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(orgId) && isValidId(paymentId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 4: Workers
+      match /workers/{workerId} {
+        allow get: if isValidId(orgId) && isValidId(workerId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(workerId)
+          && isSignedIn()
+          && isValidWorker(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == workerId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(orgId) && isValidId(workerId)
+          && isSignedIn()
+          && isValidWorker(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == existing().id
+          && incoming().orgOwnerId == existing().orgOwnerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'phone', 'contractType', 'payBasis', 'rateFcfa', 'advancesFcfa', 'active', 'memberUids', 'updatedAt']);
+        allow delete: if isValidId(orgId) && isValidId(workerId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 4: Attendance & Piecework
+      match /attendance/{attendanceId} {
+        allow get: if isValidId(orgId) && isValidId(attendanceId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(attendanceId)
+          && isSignedIn()
+          && isValidAttendanceRecord(incoming())
+          && isOrgMember(orgId)
+          && exists(/databases/$(database)/documents/organizations/$(orgId)/workers/$(incoming().workerId))
+          && incoming().id == attendanceId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().recordedByUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(orgId) && isValidId(attendanceId)
+          && isSignedIn()
+          && isValidAttendanceRecord(incoming())
+          && canManageOperations(orgId)
+          && existing().paidOut == false
+          && incoming().id == existing().id
+          && incoming().orgOwnerId == existing().orgOwnerId
+          && incoming().workerId == existing().workerId
+          && incoming().recordedByUid == existing().recordedByUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'unitsCompleted', 'earnedFcfa', 'advanceGivenFcfa', 'paidOut', 'updatedAt']);
+        allow delete: if isValidId(orgId) && isValidId(attendanceId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Module 2: Daily Cash Closings (Append-Only)
+      match /cashClosings/{closingId} {
+        allow get: if isValidId(orgId) && isValidId(closingId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(closingId)
+          && isSignedIn()
+          && isValidCashClosing(incoming())
+          && canManageOperations(orgId)
+          && incoming().id == closingId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().closedByUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(orgId) && isValidId(closingId) && isSignedIn() && isOrgAdmin(orgId);
+      }
+
+      // Audit Logs (Strictly Immutable)
+      match /auditLogs/{logId} {
+        allow get: if isValidId(orgId) && isValidId(logId) && isSignedIn() && isOrgMember(orgId);
+        allow list: if isSignedIn() && (isSuperAdmin() || resource.data.orgOwnerId == request.auth.uid || request.auth.uid in resource.data.memberUids);
+        allow create: if isValidId(orgId) && isValidId(logId)
+          && isSignedIn()
+          && isValidAuditLog(incoming())
+          && isOrgMember(orgId)
+          && incoming().id == logId
+          && incoming().orgOwnerId == orgData(orgId).ownerId
+          && incoming().actorUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
